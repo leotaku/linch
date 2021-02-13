@@ -10,18 +10,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var limitArg int
-var noColorArg bool
-var sedModeArg bool
+var (
+	limitArg   int
+	noColorArg bool
+	sedModeArg bool
+)
 
 var rootCmd = &cobra.Command{
 	Use:     "linch [flags..]",
 	Short:   "Linch is a simplistic non-recursive link validator",
+	Version: "0.1",
 	Example: `  $ echo README.md | linch
   $ find ../notes | linch
   $ fd | linch --sed-mode | parallel -j1`,
-	Version: "0.1",
-	Args:    cobra.NoArgs,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 
