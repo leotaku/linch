@@ -17,6 +17,9 @@ var sedModeArg bool
 var rootCmd = &cobra.Command{
 	Use:     "linch [flags..]",
 	Short:   "Linch is a simplistic non-recursive link validator",
+	Example: `  $ echo README.md | linch
+  $ find ../notes | linch
+  $ fd | linch --sed-mode | parallel -j1`,
 	Version: "0.1",
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
