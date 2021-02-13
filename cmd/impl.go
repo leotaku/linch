@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"sync"
@@ -17,13 +18,16 @@ var tripper = http.DefaultTransport
 var regexpGuessOne = regexp.MustCompile(`(https?):\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{2,256}\.[a-z]{2,4}\b([-a-zA-Z0-9@:%_\+.~#?&//=]*)`)
 
 type Action struct {
-	Original string
+	Original Link
 	Redir    string
 	Status   int
 	Error    error
 }
 
-type Link = string
+type Link struct {
+	Text string
+	Path string
+}
 
 type Signal chan struct{}
 
@@ -33,7 +37,11 @@ func (s Signal) Send() {
 
 func extractLinksForPaths(s *bufio.Scanner, links chan Link, stop Signal) {
 	for s.Scan() {
-		extractLinksForPath(s.Text(), links)
+		path, err := filepath.Abs(s.Text())
+		if err != nil {
+			panic("unreachable")
+		}
+		extractLinksForPath(path, links)
 	}
 	stop.Send()
 }
@@ -49,7 +57,10 @@ func extractLinksForPath(path string, links chan Link) {
 	for buf.Scan() {
 		matches := regexpGuessOne.FindAllString(buf.Text(), -1)
 		for _, rawurl := range matches {
-			links <- rawurl
+			links <- Link{
+				Text: rawurl,
+				Path: path,
+			}
 		}
 	}
 }
@@ -88,8 +99,8 @@ func startLinkHandler() (chan Link, chan Action, Signal) {
 
 var hostmap sync.Map
 
-func handleLink(rawurl Link, links chan Link, rsps chan Action) {
-	url, _ := url.Parse(rawurl)
+func handleLink(link Link, links chan Link, rsps chan Action) {
+	url, _ := url.Parse(link.Text)
 	val, _ := hostmap.Load(url.Host)
 	switch f := val.(type) {
 	case time.Time:
@@ -100,13 +111,13 @@ func handleLink(rawurl Link, links chan Link, rsps chan Action) {
 		}
 	}
 
-	req, _ := http.NewRequest("HEAD", rawurl, nil)
+	req, _ := http.NewRequest("HEAD", link.Text, nil)
 	resp, err := tripper.RoundTrip(req)
 
 	switch {
 	case err != nil:
 		rsps <- Action{
-			Original: rawurl,
+			Original: link,
 			Error:    err,
 		}
 	case resp.StatusCode == 429:
@@ -126,24 +137,24 @@ func handleLink(rawurl Link, links chan Link, rsps chan Action) {
 			after.Add(time.Second)
 		}
 		hostmap.Store(resp.Request.URL.Host, after)
-		links <- rawurl
+		links <- link
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
-		rsps <- handleRedirect(rawurl, resp)
+		rsps <- handleRedirect(link, resp)
 	default:
 		rsps <- Action{
-			Original: rawurl,
 			Redir:    "",
+			Original: link,
 			Status:   resp.StatusCode,
 			Error:    err,
 		}
 	}
 }
 
-func handleRedirect(rawurl string, resp *http.Response) Action {
+func handleRedirect(link Link, resp *http.Response) Action {
 	redirs := resp.Header["Location"]
 	if len(redirs) == 0 {
 		return Action{
-			Original: rawurl,
+			Original: link,
 			Error:    fmt.Errorf("missing location in redirection"),
 			Status:   resp.StatusCode,
 		}
@@ -152,9 +163,9 @@ func handleRedirect(rawurl string, resp *http.Response) Action {
 	redurl, err := url.Parse(redirs[0])
 	if err != nil {
 		return Action{
-			Original: rawurl,
-			Error:    fmt.Errorf("invalid location in redirection: '%s'", redirs[0]),
+			Original: link,
 			Status:   resp.StatusCode,
+			Error:    fmt.Errorf("invalid location in redirection: '%s'", redirs[0]),
 		}
 	}
 	if len(redurl.Host) == 0 {
@@ -165,7 +176,7 @@ func handleRedirect(rawurl string, resp *http.Response) Action {
 	}
 
 	return Action{
-		Original: rawurl,
+		Original: link,
 		Redir:    redurl.String(),
 		Status:   resp.StatusCode,
 	}

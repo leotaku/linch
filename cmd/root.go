@@ -12,6 +12,7 @@ import (
 
 var limitArg int
 var noColorArg bool
+var sedModeArg bool
 
 var rootCmd = &cobra.Command{
 	Use:     "linch [flags..]",
@@ -27,7 +28,16 @@ var rootCmd = &cobra.Command{
 
 		au := aurora.NewAurora(!noColorArg)
 		for rsp := range rsps {
-			fmt.Println(rsp.Pretty(au))
+			line := ""
+			switch {
+			case sedModeArg:
+				line = rsp.SedCommand()
+			default:
+				line = rsp.Pretty(au)
+			}
+			if line != "" {
+				fmt.Println(line)
+			}
 		}
 
 		return nil
@@ -45,6 +55,7 @@ func init() {
 	rootCmd.Flags().IntVarP(&limitArg, "limit", "l", 10, "limit number of concurrent connections")
 	_, no_color := os.LookupEnv("NO_COLOR")
 	rootCmd.Flags().BoolVarP(&noColorArg, "no-color", "n", no_color, "whether to disable colors in output")
+	rootCmd.Flags().BoolVarP(&sedModeArg, "sed-mode", "s", false, "whether to emit sed commands")
 	rootCmd.Flags().SortFlags = false
 }
 
@@ -55,14 +66,25 @@ func (a Action) Pretty(au aurora.Aurora) string {
 	case a.Error != nil:
 		return fmt.Sprintf("INTER %v: %v", au.Magenta(a.Status), a.Error)
 	case a.Status < 300:
-		return fmt.Sprintf("SUCCE %v: %v", au.Green(a.Status), a.Original)
+		return fmt.Sprintf("SUCCE %v: %v", au.Green(a.Status), a.Original.Text)
 	case a.Status == 301 || a.Status == 308:
 		redir, _ := url.QueryUnescape(a.Redir)
-		return fmt.Sprintf("REDIR %v: %v -> %v", au.Yellow(a.Status), a.Original, redir)
+		return fmt.Sprintf("REDIR %v: %v -> %v", au.Yellow(a.Status), a.Original.Text, redir)
 	case a.Status == 302 || a.Status == 307:
 		redir, _ := url.QueryUnescape(a.Redir)
-		return fmt.Sprintf("SEMIR %v: %v -> %v", au.Blue(a.Status), a.Original, redir)
+		return fmt.Sprintf("SEMIR %v: %v -> %v", au.Blue(a.Status), a.Original.Text, redir)
 	default:
-		return fmt.Sprintf("ERROR %v: %v", au.Red(a.Status), a.Original)
+		return fmt.Sprintf("ERROR %v: %v", au.Red(a.Status), a.Original.Text)
+	}
+}
+
+func (a Action) SedCommand() string {
+	switch {
+	case a.Status == 301 || a.Status == 308:
+		return fmt.Sprintf("sed -i -e 's^%v^%v^g' %v", a.Original.Text, a.Redir, a.Original.Path)
+	case a.Error != nil:
+		return fmt.Sprintf("echo error '%v'", a.Error)
+	default:
+		return ""
 	}
 }
