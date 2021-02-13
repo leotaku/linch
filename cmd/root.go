@@ -58,8 +58,8 @@ func Execute() {
 
 func init() {
 	rootCmd.Flags().IntVarP(&limitArg, "limit", "l", 10, "limit number of concurrent connections")
-	_, no_color := os.LookupEnv("NO_COLOR")
-	rootCmd.Flags().BoolVarP(&noColorArg, "no-color", "n", no_color, "whether to disable colors in output")
+	_, noColor := os.LookupEnv("NO_COLOR")
+	rootCmd.Flags().BoolVarP(&noColorArg, "no-color", "n", noColor, "whether to disable colors in output")
 	rootCmd.Flags().BoolVarP(&sedModeArg, "sed-mode", "s", false, "whether to emit sed commands")
 	rootCmd.Flags().SortFlags = false
 }
