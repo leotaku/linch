@@ -142,7 +142,6 @@ func handleLink(link Link, links chan Link, rsps chan Action) {
 		rsps <- handleRedirect(link, resp)
 	default:
 		rsps <- Action{
-			Redir:    "",
 			Original: link,
 			Status:   resp.StatusCode,
 			Error:    err,
