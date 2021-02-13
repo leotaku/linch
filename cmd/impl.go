@@ -2,136 +2,172 @@ package cmd
 
 import (
 	"bufio"
-	"errors"
+	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
-
-	http "github.com/valyala/fasthttp"
 )
+
+var tripper = http.DefaultTransport
 
 var regexpGuessOne = regexp.MustCompile(`(https?):\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{2,256}\.[a-z]{2,4}\b([-a-zA-Z0-9@:%_\+.~#?&//=]*)`)
 
 type Action struct {
-	Original *url.URL
-	Redir    *url.URL
+	Original string
+	Redir    string
 	Status   int
-	Err      error
+	Error    error
 }
 
-func extractLinksForPaths(s *bufio.Scanner, send chan string) {
+type Link = string
+
+type Signal chan struct{}
+
+func (s Signal) Send() {
+	close(s)
+}
+
+func extractLinksForPaths(s *bufio.Scanner, links chan Link, stop Signal) {
 	for s.Scan() {
-		extractLinksForPath(s.Text(), send)
+		extractLinksForPath(s.Text(), links)
 	}
-	close(send)
+	stop.Send()
 }
 
-func extractLinksForPath(path string, send chan string) {
+func extractLinksForPath(path string, links chan Link) {
 	file, err := openValidFile(path)
-	defer file.Close()
 	if err != nil {
 		return
 	}
+	defer file.Close()
 
 	buf := bufio.NewScanner(file)
 	for buf.Scan() {
 		matches := regexpGuessOne.FindAllString(buf.Text(), -1)
 		for _, rawurl := range matches {
-			send <- rawurl
+			links <- rawurl
 		}
 	}
 }
 
-func startLinkHandler() (chan string, chan Action) {
-	links := make(chan string, 1000)
+func startLinkHandler() (chan Link, chan Action, Signal) {
+	links := make(chan Link, 1000)
 	rsps := make(chan Action, 100)
+	stop := make(Signal)
 
 	go func() {
 		wg := new(sync.WaitGroup)
 		for i := 0; i < limitArg; i++ {
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
-				for link := range links {
-					handleRawLink(link, rsps)
-					time.Sleep(waitArg)
+				for {
+					select {
+					case link := <-links:
+						handleLink(link, links, rsps)
+					default:
+						select {
+						case <-stop:
+							wg.Done()
+							return
+						default:
+						}
+					}
 				}
-				wg.Done()
 			}(wg)
 		}
 		wg.Wait()
 		close(rsps)
 	}()
 
-	return links, rsps
+	return links, rsps, stop
 }
 
-var syncmap sync.Map
+var hostmap sync.Map
 
-func handleRawLink(rawurl string, rsps chan Action) {
-	_, loaded := syncmap.LoadOrStore(rawurl, nil)
-	if loaded {
-		return
+func handleLink(rawurl Link, links chan Link, rsps chan Action) {
+	url, _ := url.Parse(rawurl)
+	val, _ := hostmap.Load(url.Host)
+	switch f := val.(type) {
+	case time.Time:
+		if time.Now().After(f) {
+			hostmap.Delete(url.Host)
+		} else {
+			return
+		}
 	}
 
-	url, err := url.Parse(rawurl)
-	if err != nil {
-		rsps <- Action{Err: err}
-	} else {
-		rsps <- handleLink(*url)
-	}
-}
-
-func handleLink(link url.URL) Action {
-	req := http.AcquireRequest()
-	resp := http.AcquireResponse()
-	defer http.ReleaseRequest(req)
-	defer http.ReleaseResponse(resp)
-
-	req.Header.SetMethod("HEAD")
-	req.SetRequestURI(link.String())
-	err := http.DoTimeout(req, resp, timeoutArg)
-	status := resp.StatusCode()
+	req, _ := http.NewRequest("HEAD", rawurl, nil)
+	resp, err := tripper.RoundTrip(req)
 
 	switch {
 	case err != nil:
-		return Action{
-			Original: &link,
-			Err:      err,
+		rsps <- Action{
+			Original: rawurl,
+			Error:    err,
 		}
-	case status >= 300 && status < 400:
-		redir := string(resp.Header.Peek("Location"))
-		redurl, err := url.Parse(redir)
-		if len(redir) == 0 {
-			err = errors.New("missing location in redirection")
-		} else {
-			if len(redurl.Host) == 0 {
-				redurl.Host = link.Host
-			}
-			if len(redurl.Scheme) == 0 {
-				redurl.Scheme = link.Scheme
-			}
-		}
-		if err == nil {
-			return Action{
-				Original: &link,
-				Redir:    redurl,
-				Status:   status,
+	case resp.StatusCode == 429:
+		after := time.Now()
+		if it, ok := resp.Header["Retry-After"]; ok {
+			if len(it) != 0 {
+				secs, err := strconv.ParseUint(it[0], 10, 64)
+				if err == nil {
+					after.Add(time.Second * time.Duration(secs))
+				} else {
+					after.Add(time.Second)
+				}
+			} else {
+				after.Add(time.Second)
 			}
 		} else {
-			return Action{
-				Original: &link,
-				Err:      err,
-				Status:   status,
-			}
+			after.Add(time.Second)
 		}
+		hostmap.Store(resp.Request.URL.Host, after)
+		links <- rawurl
+	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		rsps <- handleRedirect(rawurl, resp)
 	default:
-		return Action{
-			Original: &link,
-			Redir:    nil,
-			Status:   status,
+		rsps <- Action{
+			Original: rawurl,
+			Redir:    "",
+			Status:   resp.StatusCode,
+			Error:    err,
 		}
+	}
+}
+
+func handleRedirect(rawurl string, resp *http.Response) Action {
+	redirs := resp.Header["Location"]
+	if len(redirs) == 0 {
+		return Action{
+			Original: rawurl,
+			Error:    fmt.Errorf("missing location in redirection"),
+			Status:   resp.StatusCode,
+		}
+	}
+
+	redurl, err := url.Parse(redirs[0])
+	if err != nil {
+		return Action{
+			Original: rawurl,
+			Error:    fmt.Errorf("invalid location in redirection: '%s'", redirs[0]),
+			Status:   resp.StatusCode,
+		}
+	}
+	if len(redurl.Host) == 0 {
+		redurl.Host = resp.Request.URL.Host
+	}
+	if len(redurl.Scheme) == 0 {
+		redurl.Scheme = resp.Request.URL.Scheme
+	}
+
+	return Action{
+		Original: rawurl,
+		Redir:    redurl.String(),
+		Status:   resp.StatusCode,
 	}
 }
 
@@ -140,7 +176,7 @@ func openValidFile(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	} else if info.IsDir() {
-		return nil, errors.New("file is directory")
+		return nil, fmt.Errorf("file is directory")
 	}
 
 	return os.Open(path)
