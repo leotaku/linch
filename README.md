@@ -25,4 +25,4 @@ Many sed commands may edit the same file so ensure that they are always run sequ
 
 ## License
 
-[MIT](./LICENSE) © Leo Gaskin 2020-2021
+[MIT](./LICENSE) © Leo Gaskin 2020-2022
