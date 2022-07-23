@@ -13,7 +13,7 @@ echo README.md | linch
 find ../notes | linch
 ```
 
-Linch check on filepaths that are passed on standard input. This way it can easily be composed with other command line tools.
+Linch will search for URLs in any files that are passed on standard input. This way it can easily be composed with other command line tools.
 Passed directories are ignored silently and not checked.
 
 ``` shell
