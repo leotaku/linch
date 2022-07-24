@@ -27,9 +27,9 @@ var rootCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 
-		links, rsps, stop := startLinkHandler()
+		links, rsps := startLinkHandler()
 		lines := bufio.NewScanner(os.Stdin)
-		go extractLinksForPaths(lines, links, stop)
+		go extractLinksForPaths(lines, links)
 
 		au := aurora.NewAurora(!noColorArg)
 		for rsp := range rsps {

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 	"sync"
 	"time"
 )
+
+var urlmap sync.Map
 
 var tripper = &http.Transport{
 	TLSClientConfig: &tls.Config{
@@ -34,13 +37,7 @@ type Link struct {
 	Path string
 }
 
-type Signal chan struct{}
-
-func (s Signal) Send() {
-	close(s)
-}
-
-func extractLinksForPaths(s *bufio.Scanner, links chan Link, stop Signal) {
+func extractLinksForPaths(s *bufio.Scanner, links chan Link) {
 	for s.Scan() {
 		path, err := filepath.Abs(s.Text())
 		if err != nil {
@@ -48,7 +45,7 @@ func extractLinksForPaths(s *bufio.Scanner, links chan Link, stop Signal) {
 		}
 		extractLinksForPath(path, links)
 	}
-	stop.Send()
+	close(links)
 }
 
 func extractLinksForPath(path string, links chan Link) {
@@ -70,83 +67,58 @@ func extractLinksForPath(path string, links chan Link) {
 	}
 }
 
-func startLinkHandler() (chan Link, chan Action, Signal) {
-	links := make(chan Link, 1000)
+func startLinkHandler() (chan Link, chan Action) {
+	inLinks := make(chan Link, 1000)
 	rsps := make(chan Action, 100)
-	stop := make(Signal)
 
 	go func() {
 		wg := new(sync.WaitGroup)
 		for i := 0; i < limitArg; i++ {
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
-				for {
-					select {
-					case link := <-links:
-						handleLink(link, links, rsps)
-					default:
-						select {
-						case <-stop:
-							wg.Done()
-							return
-						default:
-						}
+				for link := range inLinks {
+					if val, ok := urlmap.Load(link.Text); !ok {
+						action := handleLink(link)
+						urlmap.Store(link.Text, action)
+						rsps <- action
+					} else if action, ok := val.(Action); ok {
+						rsps <- action
 					}
 				}
+				wg.Done()
 			}(wg)
 		}
 		wg.Wait()
 		close(rsps)
 	}()
 
-	return links, rsps, stop
+	return inLinks, rsps
 }
 
-var hostmap sync.Map
-
-func handleLink(link Link, links chan Link, rsps chan Action) {
-	url, _ := url.Parse(link.Text)
-	val, _ := hostmap.Load(url.Host)
-	switch f := val.(type) {
-	case time.Time:
-		if time.Now().After(f) {
-			hostmap.Delete(url.Host)
-		} else {
-			return
+func handleLink(link Link) Action {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	req, err := http.NewRequestWithContext(ctx, "HEAD", link.Text, nil)
+	defer cancel()
+	if err != nil {
+		return Action{
+			Original: link,
+			Error:    err,
 		}
 	}
 
-	req, _ := http.NewRequest("HEAD", link.Text, nil)
-	resp, err := tripper.RoundTrip(req)
-
-	switch {
+	switch resp, err := tripper.RoundTrip(req); {
 	case err != nil:
-		rsps <- Action{
+		return Action{
 			Original: link,
 			Error:    err,
 		}
 	case resp.StatusCode == 429:
-		after := time.Now()
-		if it, ok := resp.Header["Retry-After"]; ok {
-			if len(it) != 0 {
-				secs, err := strconv.ParseUint(it[0], 10, 64)
-				if err == nil {
-					after.Add(time.Second * time.Duration(secs))
-				} else {
-					after.Add(time.Second)
-				}
-			} else {
-				after.Add(time.Second)
-			}
-		} else {
-			after.Add(time.Second)
-		}
-		hostmap.Store(resp.Request.URL.Host, after)
-		links <- link
+		time.Sleep(getRetryDuration(resp))
+		return handleLink(link)
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
-		rsps <- handleRedirect(link, resp)
+		return handleRedirect(link, resp)
 	default:
-		rsps <- Action{
+		return Action{
 			Original: link,
 			Status:   resp.StatusCode,
 			Error:    err,
@@ -184,6 +156,18 @@ func handleRedirect(link Link, resp *http.Response) Action {
 		Redir:    redurl.String(),
 		Status:   resp.StatusCode,
 	}
+}
+
+func getRetryDuration(resp *http.Response) time.Duration {
+	if it, ok := resp.Header["Retry-After"]; ok {
+		if len(it) != 0 {
+			secs, err := strconv.ParseUint(it[0], 10, 64)
+			if err == nil {
+				return time.Second * time.Duration(secs)
+			}
+		}
+	}
+	return time.Second
 }
 
 func openValidFile(path string) (*os.File, error) {
