@@ -67,7 +67,7 @@ func init() {
 func (a Action) Pretty(au aurora.Aurora) string {
 	switch {
 	case a.Error != nil && a.Status == 0:
-		return fmt.Sprintf("INTER %v: %v", au.Magenta("XXX"), a.Error)
+		return fmt.Sprintf("INTER %v: %v %v", au.Magenta("XXX"), a.Error, a.Original.Text)
 	case a.Error != nil:
 		return fmt.Sprintf("INTER %v: %v", au.Magenta(a.Status), a.Error)
 	case a.Status < 300:
