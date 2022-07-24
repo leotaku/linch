@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -13,7 +14,11 @@ import (
 	"time"
 )
 
-var tripper = http.DefaultTransport
+var tripper = &http.Transport{
+	TLSClientConfig: &tls.Config{
+		InsecureSkipVerify: true,
+	},
+}
 
 var regexpGuessOne = regexp.MustCompile(`(https?):\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{2,256}\.[a-z]{2,4}\b([-a-zA-Z0-9@:%_\+.~#?&//=]*)`)
 
