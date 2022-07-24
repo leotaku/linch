@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,6 +31,8 @@ type Action struct {
 	Redir    string
 	Status   int
 	Error    error
+
+	retryAfter time.Duration
 }
 
 type Link struct {
@@ -79,8 +82,18 @@ func startLinkHandler() (chan Link, chan Action) {
 				for link := range inLinks {
 					if val, ok := urlmap.Load(link.Text); !ok {
 						action := handleLink(link)
-						urlmap.Store(link.Text, action)
-						rsps <- action
+						if action.Status == 429 {
+							wg.Add(1)
+							go func() {
+								randomize := time.Duration(1 + rand.Float32())
+								time.Sleep(action.retryAfter + randomize)
+								inLinks <- link
+								wg.Done()
+							}()
+						} else {
+							urlmap.Store(link.Text, action)
+							rsps <- action
+						}
 					} else if action, ok := val.(Action); ok {
 						rsps <- action
 					}
@@ -112,11 +125,14 @@ func handleLink(link Link) Action {
 			Original: link,
 			Error:    err,
 		}
-	case resp.StatusCode == 429:
-		time.Sleep(getRetryDuration(resp))
-		return handleLink(link)
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
 		return handleRedirect(link, resp)
+	case resp.StatusCode == 429:
+		return Action{
+			Original:   link,
+			Status:     resp.StatusCode,
+			retryAfter: getRetryAfter(resp),
+		}
 	default:
 		return Action{
 			Original: link,
@@ -158,7 +174,7 @@ func handleRedirect(link Link, resp *http.Response) Action {
 	}
 }
 
-func getRetryDuration(resp *http.Response) time.Duration {
+func getRetryAfter(resp *http.Response) time.Duration {
 	if it, ok := resp.Header["Retry-After"]; ok {
 		if len(it) != 0 {
 			secs, err := strconv.ParseUint(it[0], 10, 64)
@@ -167,7 +183,7 @@ func getRetryDuration(resp *http.Response) time.Duration {
 			}
 		}
 	}
-	return time.Second
+	return time.Second * 15
 }
 
 func openValidFile(path string) (*os.File, error) {
