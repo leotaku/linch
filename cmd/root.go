@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"os"
 
-	"github.com/logrusorgru/aurora/v3"
+	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
 
@@ -31,14 +31,14 @@ var rootCmd = &cobra.Command{
 		lines := bufio.NewScanner(os.Stdin)
 		go extractLinksForPaths(lines, links)
 
-		au := aurora.NewAurora(!noColorArg)
+		color.NoColor = noColorArg
 		for rsp := range rsps {
 			line := ""
 			switch {
 			case sedModeArg:
 				line = rsp.SedCommand()
 			default:
-				line = rsp.Pretty(au)
+				line = rsp.Pretty()
 			}
 			if line != "" {
 				fmt.Println(line)
@@ -64,22 +64,22 @@ func init() {
 	rootCmd.Flags().SortFlags = false
 }
 
-func (a Action) Pretty(au aurora.Aurora) string {
+func (a Action) Pretty() string {
 	switch {
 	case a.Error != nil && a.Status == 0:
-		return fmt.Sprintf("INTER %v: %v %v", au.Magenta("XXX"), a.Error, a.Original.Text)
+		return fmt.Sprintf("INTER %v: %v %v", color.New(color.FgMagenta).Sprint("XXX"), a.Error, a.Original.Text)
 	case a.Error != nil:
-		return fmt.Sprintf("INTER %v: %v", au.Magenta(a.Status), a.Error)
+		return fmt.Sprintf("INTER %v: %v", color.New(color.FgMagenta).Sprint(a.Status), a.Error)
 	case a.Status < 300:
-		return fmt.Sprintf("SUCCE %v: %v", au.Green(a.Status), a.Original.Text)
+		return fmt.Sprintf("SUCCE %v: %v", color.New(color.FgGreen).Sprint(a.Status), a.Original.Text)
 	case a.Status == 301 || a.Status == 308:
 		redir, _ := url.QueryUnescape(a.Redir)
-		return fmt.Sprintf("REDIR %v: %v -> %v", au.Yellow(a.Status), a.Original.Text, redir)
+		return fmt.Sprintf("REDIR %v: %v -> %v", color.New(color.FgYellow).Sprint(a.Status), a.Original.Text, redir)
 	case a.Status == 302 || a.Status == 307:
 		redir, _ := url.QueryUnescape(a.Redir)
-		return fmt.Sprintf("SEMIR %v: %v -> %v", au.Blue(a.Status), a.Original.Text, redir)
+		return fmt.Sprintf("SEMIR %v: %v -> %v", color.New(color.FgBlue).Sprint(a.Status), a.Original.Text, redir)
 	default:
-		return fmt.Sprintf("ERROR %v: %v", au.Red(a.Status), a.Original.Text)
+		return fmt.Sprintf("ERROR %v: %v", color.New(color.FgRed).Sprint(a.Status), a.Original.Text)
 	}
 }
 

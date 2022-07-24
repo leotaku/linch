@@ -3,6 +3,6 @@ module github.com/leotaku/linch
 go 1.15
 
 require (
-	github.com/logrusorgru/aurora/v3 v3.0.0
+	github.com/fatih/color v1.13.0
 	github.com/spf13/cobra v1.5.0
 )
