@@ -36,7 +36,7 @@ type Action struct {
 }
 
 type Link struct {
-	Text string
+	URL  string
 	Path string
 }
 
@@ -63,7 +63,7 @@ func extractLinksForPath(path string, links chan Link) {
 		matches := regexpGuessOne.FindAllString(buf.Text(), -1)
 		for _, rawurl := range matches {
 			links <- Link{
-				Text: rawurl,
+				URL:  rawurl,
 				Path: path,
 			}
 		}
@@ -80,7 +80,7 @@ func startLinkHandler() (chan Link, chan Action) {
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
 				for link := range inLinks {
-					if val, ok := urlmap.Load(link.Text); !ok {
+					if val, ok := urlmap.Load(link.URL); !ok {
 						action := handleLink(link)
 						if action.Status == 429 {
 							wg.Add(1)
@@ -91,7 +91,7 @@ func startLinkHandler() (chan Link, chan Action) {
 								wg.Done()
 							}()
 						} else {
-							urlmap.Store(link.Text, action)
+							urlmap.Store(link.URL, action)
 							rsps <- action
 						}
 					} else if action, ok := val.(Action); ok {
@@ -110,7 +110,7 @@ func startLinkHandler() (chan Link, chan Action) {
 
 func handleLink(link Link) Action {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
-	req, err := http.NewRequestWithContext(ctx, "HEAD", link.Text, nil)
+	req, err := http.NewRequestWithContext(ctx, "HEAD", link.URL, nil)
 	defer cancel()
 	if err != nil {
 		return Action{
