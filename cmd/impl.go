@@ -71,37 +71,51 @@ func extractLinksForPath(path string, links chan Link) {
 }
 
 func startLinkHandler() (chan Link, chan Action) {
-	inLinks := make(chan Link, 1000)
+	inLinks := make(chan Link)
 	rsps := make(chan Action, 100)
 
+	wg := new(sync.WaitGroup)
+	forwardLinks := make(chan Link, 1000)
+
+	wg.Add(1)
 	go func() {
-		wg := new(sync.WaitGroup)
-		for i := 0; i < limitArg; i++ {
+		for link := range inLinks {
 			wg.Add(1)
+			forwardLinks <- link
+		}
+		wg.Done()
+	}()
+
+	go func() {
+		for i := 0; i < limitArg; i++ {
 			go func(wg *sync.WaitGroup) {
-				for link := range inLinks {
+				for link := range forwardLinks {
 					if val, ok := urlmap.Load(link.URL); !ok {
 						action := handleLink(link)
 						if action.Status == 429 {
-							wg.Add(1)
 							go func() {
+								// Forward
 								randomize := time.Duration(1 + rand.Float32())
 								time.Sleep(action.retryAfter + randomize)
 								inLinks <- link
-								wg.Done()
 							}()
 						} else {
 							urlmap.Store(link.URL, action)
+							// Return
 							rsps <- action
+							wg.Done()
 						}
 					} else if action, ok := val.(Action); ok {
+						// Return
 						rsps <- action
+						wg.Done()
 					}
 				}
-				wg.Done()
 			}(wg)
 		}
+
 		wg.Wait()
+		close(forwardLinks)
 		close(rsps)
 	}()
 
