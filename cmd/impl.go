@@ -93,6 +93,7 @@ func startLinkHandler() (chan Link, chan Action) {
 					if val, ok := urlmap.Load(link.URL); !ok {
 						action := handleLink(link)
 						if action.Status == 429 {
+							link := link
 							go func() {
 								// Forward
 								randomize := time.Duration(1 + rand.Float32())
