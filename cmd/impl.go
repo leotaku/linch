@@ -56,7 +56,7 @@ func extractLinksForPath(path string, links chan Link) {
 	if err != nil {
 		return
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck
 
 	buf := bufio.NewScanner(file)
 	for buf.Scan() {
